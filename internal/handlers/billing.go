@@ -87,8 +87,28 @@ func (h *BillingHandler) CreateCheckout(c *gin.Context) {
 
 // CreatePortal returns a billing portal URL so the user can manage their subscription.
 func (h *BillingHandler) CreatePortal(c *gin.Context) {
-	portal, err := h.provider.CreatePortalSession(c.Request.Context(), c.GetString("org_id"))
+	orgID := c.GetString("org_id")
+	ctx := c.Request.Context()
+
+	sub, err := h.store.GetSubscriptionByOrgID(ctx, orgID)
 	if err != nil {
+		log.Error().Err(err).Str("org_id", orgID).Msg("billing: portal session get subscription")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"code": "BILLING_ERROR", "message": "Failed to retrieve subscription info"}})
+		return
+	}
+
+	custRef := orgID
+	if sub != nil {
+		if sub.ProviderCustomerID != "" {
+			custRef = sub.ProviderCustomerID
+		} else if sub.ProviderSubscriptionID != "" {
+			custRef = sub.ProviderSubscriptionID
+		}
+	}
+
+	portal, err := h.provider.CreatePortalSession(ctx, custRef)
+	if err != nil {
+		log.Error().Err(err).Str("org_id", orgID).Msg("billing: failed to create portal session")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"code": "BILLING_ERROR", "message": "Failed to create portal session"}})
 		return
 	}

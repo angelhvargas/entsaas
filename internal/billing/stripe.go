@@ -81,15 +81,47 @@ func (p *StripeProvider) CreateCheckoutSession(_ context.Context, orgID, planID,
 	}, nil
 }
 
-func (p *StripeProvider) CreatePortalSession(_ context.Context, orgID string) (*CustomerPortalSession, error) {
+func (p *StripeProvider) Name() ProviderName {
+	return ProviderStripe
+}
+
+func (p *StripeProvider) CreatePortalSession(_ context.Context, customerID string) (*CustomerPortalSession, error) {
 	// TODO: stripe.BillingPortalSession.Create({
-	//   customer: p.customerIDForOrg(orgID),
+	//   customer: customerID,
 	//   return_url: baseURL + "/settings/billing",
 	// })
-	_ = orgID
+	_ = customerID
 	return &CustomerPortalSession{
-		PortalURL: fmt.Sprintf("https://billing.stripe.com/stub?org=%s", orgID),
+		PortalURL: fmt.Sprintf("https://billing.stripe.com/stub?customer=%s", customerID),
 	}, nil
+}
+
+func (p *StripeProvider) FetchBillingSummary(ctx context.Context, customerID string) (*ProviderBillingSummary, error) {
+	return NoopProvider{}.FetchBillingSummary(ctx, customerID)
+}
+
+func (p *StripeProvider) UpdateSubscription(ctx context.Context, req SwitchRequest) error {
+	return NoopProvider{}.UpdateSubscription(ctx, req)
+}
+
+func (p *StripeProvider) PreviewSubscriptionUpdate(ctx context.Context, subscriptionID, targetPriceID string) (*ProrationPreview, error) {
+	return NoopProvider{}.PreviewSubscriptionUpdate(ctx, subscriptionID, targetPriceID)
+}
+
+func (p *StripeProvider) CancelSubscription(ctx context.Context, subscriptionID string) error {
+	return NoopProvider{}.CancelSubscription(ctx, subscriptionID)
+}
+
+func (p *StripeProvider) VerifyWebhook(payload []byte, headers map[string]string, secret string) error {
+	sig := headers["Stripe-Signature"]
+	sec := secret
+	if sec == "" {
+		sec = p.webhookSecret
+	}
+	if sec == "" {
+		return errors.New("stripe: webhook secret is not configured")
+	}
+	return p.verifyStripeSignature(payload, sig, sec)
 }
 
 // HandleWebhook verifies the Stripe-Signature header and dispatches the event.
@@ -101,7 +133,7 @@ func (p *StripeProvider) HandleWebhook(_ context.Context, event *WebhookEvent) (
 	}
 
 	sig := event.Headers["Stripe-Signature"]
-	if err := p.verifyStripeSignature(event.Raw, sig); err != nil {
+	if err := p.verifyStripeSignature(event.Raw, sig, p.webhookSecret); err != nil {
 		return nil, fmt.Errorf("stripe: invalid webhook signature: %w", err)
 	}
 
@@ -170,7 +202,7 @@ func (p *StripeProvider) HandleWebhook(_ context.Context, event *WebhookEvent) (
 }
 
 // verifyStripeSignature validates the Stripe-Signature header (t=timestamp,v1=hmac).
-func (p *StripeProvider) verifyStripeSignature(payload []byte, header string) error {
+func (p *StripeProvider) verifyStripeSignature(payload []byte, header string, secret string) error {
 	parts := strings.Split(header, ",")
 	var ts, sig string
 	for _, part := range parts {
@@ -192,7 +224,7 @@ func (p *StripeProvider) verifyStripeSignature(payload []byte, header string) er
 	}
 
 	signed := ts + "." + string(payload)
-	mac := hmac.New(sha256.New, []byte(p.webhookSecret))
+	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signed))
 	expected := hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(expected), []byte(sig)) {

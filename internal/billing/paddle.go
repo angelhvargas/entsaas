@@ -92,13 +92,45 @@ func (p *PaddleProvider) CreateCheckoutSession(_ context.Context, orgID, planID,
 	}, nil
 }
 
-func (p *PaddleProvider) CreatePortalSession(_ context.Context, orgID string) (*CustomerPortalSession, error) {
+func (p *PaddleProvider) Name() ProviderName {
+	return ProviderPaddle
+}
+
+func (p *PaddleProvider) CreatePortalSession(_ context.Context, customerID string) (*CustomerPortalSession, error) {
 	// TODO: POST /customers/{customer_id}/portal-sessions
 	// The portal URL is returned directly in the response.
-	_ = orgID
+	_ = customerID
 	return &CustomerPortalSession{
-		PortalURL: fmt.Sprintf("%s/customer-portal/stub?org=%s", p.baseURL, orgID),
+		PortalURL: fmt.Sprintf("%s/customer-portal/stub?customer=%s", p.baseURL, customerID),
 	}, nil
+}
+
+func (p *PaddleProvider) FetchBillingSummary(ctx context.Context, customerID string) (*ProviderBillingSummary, error) {
+	return NoopProvider{}.FetchBillingSummary(ctx, customerID)
+}
+
+func (p *PaddleProvider) UpdateSubscription(ctx context.Context, req SwitchRequest) error {
+	return NoopProvider{}.UpdateSubscription(ctx, req)
+}
+
+func (p *PaddleProvider) PreviewSubscriptionUpdate(ctx context.Context, subscriptionID, targetPriceID string) (*ProrationPreview, error) {
+	return NoopProvider{}.PreviewSubscriptionUpdate(ctx, subscriptionID, targetPriceID)
+}
+
+func (p *PaddleProvider) CancelSubscription(ctx context.Context, subscriptionID string) error {
+	return NoopProvider{}.CancelSubscription(ctx, subscriptionID)
+}
+
+func (p *PaddleProvider) VerifyWebhook(payload []byte, headers map[string]string, secret string) error {
+	sig := headers["Paddle-Signature"]
+	sec := secret
+	if sec == "" {
+		sec = p.webhookSecret
+	}
+	if sec == "" {
+		return errors.New("paddle: webhook secret is not configured")
+	}
+	return p.verifyPaddleSignature(payload, sig, sec)
 }
 
 // HandleWebhook verifies the Paddle-Signature header and dispatches the event.
@@ -111,7 +143,7 @@ func (p *PaddleProvider) HandleWebhook(_ context.Context, event *WebhookEvent) (
 	}
 
 	sig := event.Headers["Paddle-Signature"]
-	if err := p.verifyPaddleSignature(event.Raw, sig); err != nil {
+	if err := p.verifyPaddleSignature(event.Raw, sig, p.webhookSecret); err != nil {
 		return nil, fmt.Errorf("paddle: invalid webhook signature: %w", err)
 	}
 
@@ -190,7 +222,7 @@ func (p *PaddleProvider) HandleWebhook(_ context.Context, event *WebhookEvent) (
 
 // verifyPaddleSignature validates Paddle-Signature header.
 // Format: "ts=<unix>;h1=<hex-hmac>"
-func (p *PaddleProvider) verifyPaddleSignature(payload []byte, header string) error {
+func (p *PaddleProvider) verifyPaddleSignature(payload []byte, header string, secret string) error {
 	parts := strings.Split(header, ";")
 	var ts, sig string
 	for _, part := range parts {
@@ -206,7 +238,7 @@ func (p *PaddleProvider) verifyPaddleSignature(payload []byte, header string) er
 	}
 
 	signed := ts + ":" + string(payload)
-	mac := hmac.New(sha256.New, []byte(p.webhookSecret))
+	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signed))
 	expected := hex.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(expected), []byte(sig)) {

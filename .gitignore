@@ -1,9 +1,9 @@
 # ── Go ────────────────────────────────────────────────────────────────────────
-api
-workers
-seed
-migrate
-entsaasctl
+/api
+/workers
+/seed
+/migrate
+/entsaasctl
 *.exe
 *.out
 coverage.out
