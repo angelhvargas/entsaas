@@ -1,0 +1,40 @@
+# ── Go ────────────────────────────────────────────────────────────────────────
+api
+workers
+seed
+migrate
+entsaasctl
+*.exe
+*.out
+coverage.out
+vendor/
+
+# ── Node / Frontend ──────────────────────────────────────────────────────────
+node_modules/
+web/dist/
+web/coverage/
+web/test-results/
+web/playwright-report/
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+.docker/data/
+
+# ── Environment ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
+dist/
+tmp/
+
+# ── Local-only docs (ADRs, EPICs, backlog planning) ─────────────────────────
+.local-docs/

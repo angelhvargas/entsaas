@@ -1,0 +1,34 @@
+{
+  "name": "docs-site",
+  "version": "1.0.0",
+  "description": "EntSaaS Framework Developer Documentation & Marketing Landing Hub",
+  "main": "index.js",
+  "scripts": {
+    "docs:dev": "vitepress dev .",
+    "docs:audit": "node scripts/nav-audit.mjs",
+    "docs:build": "npm run docs:audit && vitepress build .",
+    "docs:preview": "vitepress preview .",
+    "test": "npm run docs:build"
+  },
+  "keywords": [
+    "entsaas",
+    "documentation",
+    "saas",
+    "vitepress"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "swagger-parser": "^10.0.3",
+    "vitepress": "^1.6.4",
+    "vitepress-theme-openapi": "^0.0.1",
+    "vue": "^3.5.30"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.1"
+  },
+  "overrides": {
+    "esbuild": ">=0.25.0"
+  }
+}

@@ -1,0 +1,52 @@
+provider: stripe # Options: stripe, paddle, mock
+cancel_behavior: period_end # Options: period_end, immediate
+currency: USD
+
+plans:
+  - id: free
+    name: Free
+    description: "Free forever — 3 projects, 3 users"
+    price_monthly: 0
+    price_yearly: 0
+    stripe_price_id: ""
+    is_self_serve: true
+    features:
+      ai_assistant_enabled: false
+      sso_enabled: false
+      priority_support: false
+    capacity:
+      max_projects: 3
+      max_members: 3
+      audit_log_retention_days: 7
+
+  - id: pro
+    name: Pro
+    description: "Pro — 3 projects, 5 users"
+    price_monthly: 19
+    price_yearly: 190
+    stripe_price_id: "price_pro_example"
+    is_self_serve: true
+    features:
+      ai_assistant_enabled: true
+      sso_enabled: false
+      priority_support: false
+    capacity:
+      max_projects: 3
+      max_members: 5
+      audit_log_retention_days: 30
+
+  - id: enterprise
+    name: Enterprise
+    description: "Enterprise — Custom limits, dedicated SLA"
+    price_monthly: 499
+    price_yearly: 4990
+    stripe_price_id: ""
+    is_self_serve: false
+    features:
+      ai_assistant_enabled: true
+      sso_enabled: true
+      priority_support: true
+    capacity:
+      max_projects: -1
+      max_members: -1
+      audit_log_retention_days: -1

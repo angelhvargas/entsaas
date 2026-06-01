@@ -1,0 +1,16 @@
+.git
+.github
+.vscode
+.docker/data
+node_modules
+web/node_modules
+web/coverage
+web/test-results
+web/playwright-report
+docs/
+*.md
+!README.md
+coverage.out
+.env
+.env.*
+.DS_Store

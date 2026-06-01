@@ -1,0 +1,58 @@
+# Dockerfile.ops — builds operational binaries for K8s CronJobs or admin tasks.
+#
+# Binaries:
+#   - migrate:    DB Migrations
+#   - seed:       DB Seeding
+#   - entsaasctl: Admin CLI
+#
+# Usage:
+#   docker build -f Dockerfile.ops -t entsaas-ops .
+#   docker run --rm -e ENTSAAS_DB_URL=... entsaas-ops ./migrate
+#   docker run --rm -e ENTSAAS_DB_URL=... entsaas-ops ./seed
+
+# Stage 1: Build ops binaries
+FROM golang:1.26.3-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git
+
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# We use -buildvcs=false locally or in CI environments where .git might be stripped
+RUN go build -buildvcs=false -trimpath -ldflags="-s -w" -o migrate ./cmd/migrate && \
+    go build -buildvcs=false -trimpath -ldflags="-s -w" -o seed ./cmd/seed && \
+    go build -buildvcs=false -trimpath -ldflags="-s -w" -o entsaasctl ./cmd/entsaasctl
+
+# Stage 2: Final image
+FROM alpine:3.21
+
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="entsaas-ops" \
+    org.opencontainers.image.description="EntSaaS operational CronJob image — migrate, seed, entsaasctl" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.revision="${COMMIT_SHA}" \
+    org.opencontainers.image.created="${BUILD_DATE}" \
+    org.opencontainers.image.source="https://github.com/angelhvargas/entsaas" \
+    org.opencontainers.image.licenses="Proprietary"
+
+WORKDIR /app
+
+# Non-root user (same UID as app image)
+RUN addgroup -S entsaas && adduser -S -u 10001 -G entsaas entsaas
+
+# Patch OS-level CVEs
+RUN apk upgrade --no-cache
+
+# Use --chown on COPY to avoid duplicate layer from RUN chown.
+COPY --from=builder --chown=entsaas:entsaas /app/migrate .
+COPY --from=builder --chown=entsaas:entsaas /app/seed .
+COPY --from=builder --chown=entsaas:entsaas /app/entsaasctl .
+
+USER entsaas

@@ -1,0 +1,44 @@
+# Stage 1: Build VitePress site
+FROM node:24-alpine AS builder
+
+WORKDIR /app
+COPY docs-site/package*.json ./
+RUN apk add --no-cache git
+RUN npm ci
+
+COPY docs-site/ ./
+
+# Copy the full OpenAPI spec from the repo docs directory for public spec generation
+COPY docs/api/openapi.yaml /openapi-source/openapi.yaml
+
+# Generate the public API spec from the source of truth
+RUN OPENAPI_SOURCE_PATH=/openapi-source/openapi.yaml node scripts/generate-public-spec.js
+
+# Build VitePress
+RUN npm run docs:build
+
+# Stage 2: Serve static files with nginx
+FROM nginxinc/nginx-unprivileged:alpine
+
+# Switch to root to perform OS patching and copy configuration
+USER root
+
+# Patch OS vulnerabilities
+RUN apk upgrade --no-cache
+
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Copy custom nginx config
+COPY docs-site/nginx.conf /etc/nginx/conf.d/default.conf
+
+# The VitePress build output
+COPY --from=builder /dist/docs /usr/share/nginx/html
+
+# Switch back to the unprivileged nginx user (101) for safety
+USER 101
+
+# Expose port 8080 for non-root bind
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]
