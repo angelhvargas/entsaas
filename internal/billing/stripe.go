@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,11 +28,12 @@ import (
 )
 
 // StripeProvider implements Provider using the Stripe API.
-// Replace the stub HTTP calls here with the official stripe-go SDK once added.
+// Replaced stub HTTP calls with ProviderHTTPClient to keep zero-dependency.
 type StripeProvider struct {
 	secretKey     string
 	webhookSecret string
 	baseURL       string
+	client        *ProviderHTTPClient
 }
 
 // NewStripeProvider constructs a StripeProvider from environment variables.
@@ -44,6 +47,7 @@ func NewStripeProvider() (*StripeProvider, error) {
 		secretKey:     key,
 		webhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
 		baseURL:       "https://api.stripe.com/v1",
+		client:        NewProviderHTTPClient(15*time.Second, 2),
 	}, nil
 }
 
@@ -64,20 +68,50 @@ func (p *StripeProvider) GetSubscription(_ context.Context, orgID string) (*Subs
 	return NoopProvider{}.GetSubscription(context.Background(), orgID)
 }
 
-func (p *StripeProvider) CreateCheckoutSession(_ context.Context, orgID, planID, successURL, cancelURL string) (*CheckoutSession, error) {
-	// TODO: stripe.CheckoutSession.Create({
-	//   mode: "subscription",
-	//   line_items: [{price: priceIDForPlan(planID), quantity: 1}],
-	//   success_url: successURL + "?session_id={CHECKOUT_SESSION_ID}",
-	//   cancel_url: cancelURL,
-	//   client_reference_id: orgID,
-	//   metadata: {"org_id": orgID},
-	// })
-	_ = orgID
-	_ = planID
+func (p *StripeProvider) CreateCheckoutSession(ctx context.Context, orgID, planID, successURL, cancelURL string) (*CheckoutSession, error) {
+	priceID := ""
+	if GlobalCatalog != nil {
+		for _, plan := range GlobalCatalog.Plans {
+			if plan.ID == planID {
+				priceID = plan.StripePriceID
+				break
+			}
+		}
+	}
+	if priceID == "" {
+		return nil, fmt.Errorf("stripe: could not resolve price ID for plan %s", planID)
+	}
+
+	form := url.Values{}
+	form.Add("mode", "subscription")
+	form.Add("line_items[0][price]", priceID)
+	form.Add("line_items[0][quantity]", "1")
+	form.Add("success_url", successURL+"?session_id={CHECKOUT_SESSION_ID}")
+	form.Add("cancel_url", cancelURL)
+	form.Add("client_reference_id", orgID)
+	form.Add("metadata[org_id]", orgID)
+
+	req, err := p.client.NewFormRequest(ctx, http.MethodPost, p.baseURL+"/checkout/sessions", p.secretKey, form.Encode())
+	if err != nil {
+		return nil, err
+	}
+
+	body, _, err := p.client.Do(req, ProviderStripe)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("stripe: failed to parse checkout response: %w", err)
+	}
+
+	sessionID, _ := data["id"].(string)
+	checkoutURL, _ := data["url"].(string)
+
 	return &CheckoutSession{
-		SessionID:   "cs_stub_" + orgID,
-		CheckoutURL: fmt.Sprintf("https://checkout.stripe.com/stub?org=%s&plan=%s", orgID, planID),
+		SessionID:   sessionID,
+		CheckoutURL: checkoutURL,
 	}, nil
 }
 
@@ -85,14 +119,34 @@ func (p *StripeProvider) Name() ProviderName {
 	return ProviderStripe
 }
 
-func (p *StripeProvider) CreatePortalSession(_ context.Context, customerID string) (*CustomerPortalSession, error) {
-	// TODO: stripe.BillingPortalSession.Create({
-	//   customer: customerID,
-	//   return_url: baseURL + "/settings/billing",
-	// })
-	_ = customerID
+func (p *StripeProvider) CreatePortalSession(ctx context.Context, customerID string) (*CustomerPortalSession, error) {
+	if customerID == "" {
+		return nil, errors.New("stripe: customer ID required for portal session")
+	}
+
+	form := url.Values{}
+	form.Add("customer", customerID)
+	// Optional: add return_url
+
+	req, err := p.client.NewFormRequest(ctx, http.MethodPost, p.baseURL+"/billing_portal/sessions", p.secretKey, form.Encode())
+	if err != nil {
+		return nil, err
+	}
+
+	body, _, err := p.client.Do(req, ProviderStripe)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("stripe: failed to parse portal response: %w", err)
+	}
+
+	urlStr, _ := data["url"].(string)
+
 	return &CustomerPortalSession{
-		PortalURL: fmt.Sprintf("https://billing.stripe.com/stub?customer=%s", customerID),
+		PortalURL: urlStr,
 	}, nil
 }
 

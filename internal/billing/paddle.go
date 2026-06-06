@@ -13,7 +13,6 @@ package billing
 // Paddle API reference: https://developer.paddle.com/api-reference
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -21,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -34,6 +32,7 @@ type PaddleProvider struct {
 	webhookSecret string
 	baseURL       string
 	sandbox       bool
+	client        *ProviderHTTPClient
 }
 
 // NewPaddleProvider constructs a PaddleProvider from environment variables.
@@ -53,6 +52,7 @@ func NewPaddleProvider() (*PaddleProvider, error) {
 		webhookSecret: os.Getenv("PADDLE_WEBHOOK_SECRET"),
 		baseURL:       baseURL,
 		sandbox:       sandbox,
+		client:        NewProviderHTTPClient(15*time.Second, 2),
 	}, nil
 }
 
@@ -72,23 +72,50 @@ func (p *PaddleProvider) GetSubscription(ctx context.Context, orgID string) (*Su
 	return NoopProvider{}.GetSubscription(ctx, orgID)
 }
 
-func (p *PaddleProvider) CreateCheckoutSession(_ context.Context, orgID, planID, successURL, cancelURL string) (*CheckoutSession, error) {
+func (p *PaddleProvider) CreateCheckoutSession(ctx context.Context, orgID, planID, successURL, cancelURL string) (*CheckoutSession, error) {
 	// Paddle uses client-side overlay checkout triggered by paddle.js.
 	// The "session" here is a Paddle transaction (POST /transactions).
-	//
-	// TODO:
-	//   body := map[string]any{
-	//     "items": []map[string]any{{"price_id": priceIDForPlan(planID), "quantity": 1}},
-	//     "custom_data": map[string]any{"org_id": orgID},
-	//     "success_url": successURL,
-	//   }
-	//   resp := p.post(ctx, "/transactions", body)
-	//   return &CheckoutSession{SessionID: resp.ID, CheckoutURL: resp.CheckoutURL}, nil
-	_ = successURL
-	_ = cancelURL
+	
+	// We lookup the provider price ID from the global catalog using the internal planID
+	priceID := ""
+	if GlobalCatalog != nil {
+		for _, plan := range GlobalCatalog.Plans {
+			if plan.ID == planID {
+				priceID = plan.StripePriceID
+				break
+			}
+		}
+	}
+	if priceID == "" {
+		return nil, fmt.Errorf("paddle: could not resolve price ID for plan %s", planID)
+	}
+
+	body := map[string]any{
+		"items": []map[string]any{{"price_id": priceID, "quantity": 1}},
+		"custom_data": map[string]any{"org_id": orgID},
+	}
+	// Note: Paddle handles success URLs client side via paddle.js, 
+	// but we can pass it if creating a generic transaction link.
+	
+	resp, err := p.post(ctx, "/transactions", body)
+	if err != nil {
+		return nil, err
+	}
+	
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return nil, errors.New("paddle: invalid response missing data")
+	}
+	
+	txnID, _ := data["id"].(string)
+	checkoutURL, _ := data["checkout_url"].(string) // If checkout_url is provided by API
+	if checkoutURL == "" {
+		checkoutURL = fmt.Sprintf("https://checkout.paddle.com/checkout/transactions/%s", txnID)
+	}
+
 	return &CheckoutSession{
-		SessionID:   "txn_stub_" + orgID,
-		CheckoutURL: fmt.Sprintf("https://checkout.paddle.com/stub?org=%s&plan=%s", orgID, planID),
+		SessionID:   txnID,
+		CheckoutURL: checkoutURL,
 	}, nil
 }
 
@@ -96,12 +123,35 @@ func (p *PaddleProvider) Name() ProviderName {
 	return ProviderPaddle
 }
 
-func (p *PaddleProvider) CreatePortalSession(_ context.Context, customerID string) (*CustomerPortalSession, error) {
-	// TODO: POST /customers/{customer_id}/portal-sessions
-	// The portal URL is returned directly in the response.
-	_ = customerID
+func (p *PaddleProvider) CreatePortalSession(ctx context.Context, customerID string) (*CustomerPortalSession, error) {
+	if customerID == "" {
+		return nil, errors.New("paddle: customer ID required for portal session")
+	}
+	path := fmt.Sprintf("/customers/%s/portal-sessions", customerID)
+	resp, err := p.post(ctx, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return nil, errors.New("paddle: invalid portal response")
+	}
+	
+	urls, _ := data["urls"].(map[string]any)
+	if urls == nil {
+		return nil, errors.New("paddle: no portal urls returned")
+	}
+	
+	portalURL, _ := urls["general"].(map[string]any)
+	urlStr, _ := portalURL["url"].(string)
+	
+	if urlStr == "" {
+		return nil, errors.New("paddle: empty portal url returned")
+	}
+
 	return &CustomerPortalSession{
-		PortalURL: fmt.Sprintf("%s/customer-portal/stub?customer=%s", p.baseURL, customerID),
+		PortalURL: urlStr,
 	}, nil
 }
 
@@ -249,39 +299,28 @@ func (p *PaddleProvider) verifyPaddleSignature(payload []byte, header string, se
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
-func (p *PaddleProvider) do(ctx context.Context, method, path string, body any) (map[string]any, error) {
-	var bodyReader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		bodyReader = bytes.NewReader(b)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, bodyReader)
+func (p *PaddleProvider) get(ctx context.Context, path string) (map[string]any, error) {
+	req, err := p.client.NewJSONRequest(ctx, http.MethodGet, p.baseURL+path, p.apiKey, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	body, _, err := p.client.DoWithRetry(req, ProviderPaddle)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("paddle API %s %s: HTTP %d: %s", method, path, resp.StatusCode, string(b))
-	}
-
 	var result map[string]any
-	return result, json.NewDecoder(resp.Body).Decode(&result)
+	return result, json.Unmarshal(body, &result)
 }
 
 func (p *PaddleProvider) post(ctx context.Context, path string, body any) (map[string]any, error) {
-	return p.do(ctx, http.MethodPost, path, body)
+	req, err := p.client.NewJSONRequest(ctx, http.MethodPost, p.baseURL+path, p.apiKey, body)
+	if err != nil {
+		return nil, err
+	}
+	respBody, _, err := p.client.Do(req, ProviderPaddle)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	return result, json.Unmarshal(respBody, &result)
 }

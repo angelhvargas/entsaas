@@ -63,9 +63,10 @@ type WebhookResult struct {
 	ProviderSubscriptionID string     `json:"provider_subscription_id,omitempty"`
 	ProviderCustomerID     string     `json:"provider_customer_id,omitempty"`
 	Status                 string     `json:"status,omitempty"` // active, canceled, past_due, etc.
-	CurrentPeriodStart     *time.Time `json:"current_period_start,omitempty"`
-	CurrentPeriodEnd       *time.Time `json:"current_period_end,omitempty"`
-	CancelAtPeriodEnd      bool       `json:"cancel_at_period_end,omitempty"`
+	CurrentPeriodStart     *time.Time         `json:"current_period_start,omitempty"`
+	CurrentPeriodEnd       *time.Time         `json:"current_period_end,omitempty"`
+	CancelAtPeriodEnd      bool               `json:"cancel_at_period_end,omitempty"`
+	Invoice                *NormalizedInvoice `json:"invoice,omitempty"`
 }
 
 // ── Multi-Provider Billing Connector Types ───────────────────────────────────

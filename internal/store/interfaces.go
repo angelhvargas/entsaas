@@ -95,6 +95,7 @@ type AppStore interface {
 	// ── Subscriptions ───────────────────────────────────────────────────
 	CreateSubscription(ctx context.Context, sub *Subscription) error
 	UpdateSubscription(ctx context.Context, sub *Subscription) error
+	UpsertSubscription(ctx context.Context, sub *Subscription) error
 	GetSubscriptionByOrgID(ctx context.Context, orgID string) (*Subscription, error)
 	GetSubscriptionByProviderID(ctx context.Context, providerSubID string) (*Subscription, error)
 	CancelSubscription(ctx context.Context, orgID string, cancelAtPeriodEnd bool) error

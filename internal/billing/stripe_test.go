@@ -42,54 +42,6 @@ func TestNewStripeProvider(t *testing.T) {
 	}
 }
 
-func TestStripeProvider_Stubs(t *testing.T) {
-	os.Setenv("STRIPE_SECRET_KEY", "sk_test_123")
-	p, err := billing.NewStripeProvider()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	ctx := context.Background()
-	plans, err := p.ListPlans(ctx)
-	if err != nil || len(plans) == 0 {
-		t.Errorf("ListPlans stub failed: %v", err)
-	}
-
-	sub, err := p.GetSubscription(ctx, "org_1")
-	if err != nil || sub == nil {
-		t.Errorf("GetSubscription stub failed: %v", err)
-	}
-
-	checkout, err := p.CreateCheckoutSession(ctx, "org_1", "pro", "http://success", "http://cancel")
-	if err != nil || checkout == nil {
-		t.Errorf("CreateCheckoutSession stub failed: %v", err)
-	}
-
-	portal, err := p.CreatePortalSession(ctx, "cus_123")
-	if err != nil || portal == nil {
-		t.Errorf("CreatePortalSession stub failed: %v", err)
-	}
-
-	summary, err := p.FetchBillingSummary(ctx, "cus_123")
-	if err != nil || summary == nil {
-		t.Errorf("FetchBillingSummary stub failed: %v", err)
-	}
-
-	err = p.UpdateSubscription(ctx, billing.SwitchRequest{})
-	if err != nil {
-		t.Errorf("UpdateSubscription stub failed: %v", err)
-	}
-
-	proration, err := p.PreviewSubscriptionUpdate(ctx, "sub_1", "price_2")
-	if err != nil || proration == nil {
-		t.Errorf("PreviewSubscriptionUpdate stub failed: %v", err)
-	}
-
-	err = p.CancelSubscription(ctx, "sub_1")
-	if err != nil {
-		t.Errorf("CancelSubscription stub failed: %v", err)
-	}
-}
 
 func TestStripeProvider_VerifyWebhook(t *testing.T) {
 	os.Setenv("STRIPE_SECRET_KEY", "sk_test_123")

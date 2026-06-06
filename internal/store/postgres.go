@@ -853,6 +853,39 @@ func (s *PostgresStore) UpdateSubscription(ctx context.Context, sub *Subscriptio
 	return nil
 }
 
+// UpsertSubscription safely updates an existing subscription or creates a new one,
+// taking only non-nil or non-empty fields from the provided subscription to prevent
+// overwriting existing data with empty values during concurrent webhooks.
+func (s *PostgresStore) UpsertSubscription(ctx context.Context, sub *Subscription) error {
+	// Use COALESCE to keep existing values if the excluded (new) value is null.
+	// For fields that might legitimately be updated to false or empty strings, we use
+	// specific checks, but for webhook events, we generally only update what is provided.
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO subscriptions (
+			org_id, plan_id, plan_version_id, status,
+			provider_subscription_id, provider_customer_id,
+			current_period_start, current_period_end,
+			cancel_at_period_end, trial_end_at, canceled_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (org_id) DO UPDATE SET
+			plan_id                  = COALESCE(EXCLUDED.plan_id, subscriptions.plan_id),
+			plan_version_id          = COALESCE(EXCLUDED.plan_version_id, subscriptions.plan_version_id),
+			status                   = COALESCE(EXCLUDED.status, subscriptions.status),
+			provider_subscription_id = COALESCE(EXCLUDED.provider_subscription_id, subscriptions.provider_subscription_id),
+			provider_customer_id     = COALESCE(EXCLUDED.provider_customer_id, subscriptions.provider_customer_id),
+			current_period_start     = COALESCE(EXCLUDED.current_period_start, subscriptions.current_period_start),
+			current_period_end       = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
+			cancel_at_period_end     = EXCLUDED.cancel_at_period_end,
+			trial_end_at             = COALESCE(EXCLUDED.trial_end_at, subscriptions.trial_end_at),
+			canceled_at              = COALESCE(EXCLUDED.canceled_at, subscriptions.canceled_at),
+			updated_at               = NOW()
+	`, sub.OrgID, nilIfEmpty(sub.PlanID), nilIfEmpty(sub.PlanVersionID), nilIfEmpty(sub.Status),
+		nilIfEmpty(sub.ProviderSubscriptionID), nilIfEmpty(sub.ProviderCustomerID),
+		sub.CurrentPeriodStart, sub.CurrentPeriodEnd,
+		sub.CancelAtPeriodEnd, sub.TrialEndAt, sub.CanceledAt)
+	return err
+}
+
 // GetSubscriptionByOrgID returns the subscription for an org, or ErrNotFound.
 func (s *PostgresStore) GetSubscriptionByOrgID(ctx context.Context, orgID string) (*Subscription, error) {
 	sub := &Subscription{}

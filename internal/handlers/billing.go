@@ -148,55 +148,44 @@ func (h *BillingHandler) Webhook(c *gin.Context) {
 
 	// Persist subscription state if the webhook carries actionable data.
 	if result.OrgID != "" && result.Status != "" {
-		// Resolve plan ID from slug if available, otherwise use existing subscription's plan.
+		// Resolve plan ID from slug if available.
 		planID := ""
 		planVersionID := ""
 		if result.PlanSlug != "" {
 			planID, planVersionID = h.resolvePlanIDs(c, result.PlanSlug)
 		}
 
-		// Try to find existing subscription to merge data.
-		existing, _ := h.store.GetSubscriptionByOrgID(c.Request.Context(), result.OrgID)
-		if existing != nil {
-			// Merge: keep existing plan if webhook didn't specify one.
-			if planID == "" {
-				planID = existing.PlanID
-				planVersionID = existing.PlanVersionID
-			}
-			existing.Status = result.Status
-			existing.ProviderSubscriptionID = result.ProviderSubscriptionID
-			existing.ProviderCustomerID = result.ProviderCustomerID
-			existing.CancelAtPeriodEnd = result.CancelAtPeriodEnd
-			if result.CurrentPeriodStart != nil {
-				existing.CurrentPeriodStart = result.CurrentPeriodStart
-			}
-			if result.CurrentPeriodEnd != nil {
-				existing.CurrentPeriodEnd = result.CurrentPeriodEnd
-			}
-			if result.Status == "canceled" {
-				now := time.Now()
-				existing.CanceledAt = &now
-			}
-			existing.PlanID = planID
-			existing.PlanVersionID = planVersionID
-			if err := h.store.UpdateSubscription(c.Request.Context(), existing); err != nil {
-				log.Error().Err(err).Str("org_id", result.OrgID).Msg("SEC-07: failed to update subscription")
-			}
-		} else {
-			// Create new subscription.
-			sub := &store.Subscription{
-				OrgID:                  result.OrgID,
-				PlanID:                 planID,
-				PlanVersionID:          planVersionID,
-				Status:                 result.Status,
-				ProviderSubscriptionID: result.ProviderSubscriptionID,
-				ProviderCustomerID:     result.ProviderCustomerID,
-				CurrentPeriodStart:     result.CurrentPeriodStart,
-				CurrentPeriodEnd:       result.CurrentPeriodEnd,
-				CancelAtPeriodEnd:      result.CancelAtPeriodEnd,
-			}
-			if err := h.store.CreateSubscription(c.Request.Context(), sub); err != nil {
-				log.Error().Err(err).Str("org_id", result.OrgID).Msg("SEC-07: failed to create subscription")
+		var canceledAt *time.Time
+		if result.Status == "canceled" {
+			now := time.Now()
+			canceledAt = &now
+		}
+
+		sub := &store.Subscription{
+			OrgID:                  result.OrgID,
+			PlanID:                 planID,
+			PlanVersionID:          planVersionID,
+			Status:                 result.Status,
+			ProviderSubscriptionID: result.ProviderSubscriptionID,
+			ProviderCustomerID:     result.ProviderCustomerID,
+			CurrentPeriodStart:     result.CurrentPeriodStart,
+			CurrentPeriodEnd:       result.CurrentPeriodEnd,
+			CancelAtPeriodEnd:      result.CancelAtPeriodEnd,
+			CanceledAt:             canceledAt,
+		}
+
+		if err := h.store.UpsertSubscription(c.Request.Context(), sub); err != nil {
+			log.Error().Err(err).Str("org_id", result.OrgID).Msg("SEC-07: failed to upsert subscription")
+		}
+	}
+
+	// Sync invoice if the webhook parsed one
+	if result.Invoice != nil && result.OrgID != "" {
+		pgStore, ok := h.store.(*store.PostgresStore)
+		if ok {
+			invStore := billing.NewInvoiceStore(pgStore.Pool())
+			if err := invStore.SyncInvoiceFromProvider(c.Request.Context(), result.OrgID, h.provider.Name(), *result.Invoice); err != nil {
+				log.Error().Err(err).Str("org_id", result.OrgID).Str("invoice_id", result.Invoice.ID).Msg("failed to sync invoice from webhook")
 			}
 		}
 	}
