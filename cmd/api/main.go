@@ -76,6 +76,10 @@ func main() {
 	}
 	log.Info().Msg("Billing catalog synchronized with database")
 
+	// Wire in-memory free-plan fallback for orgs without subscriptions
+	// when the plans table has no 'free' row (fresh deployment edge case).
+	appStore.SetFreePlanFallback(billing.FreePlanEntitlements)
+
 	// ── Billing Provider ────────────────────────────────────────────────────
 	bi := billing.New()
 

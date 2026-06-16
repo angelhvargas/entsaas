@@ -97,6 +97,26 @@ func GetPlan(slug string) (*PlanDefinition, bool) {
 	return nil, false
 }
 
+// FreePlanEntitlements returns free-plan entitlements from the in-memory catalog
+// in the (slug, map[string]any) format expected by store.GetEffectiveEntitlements.
+// Used as a last-resort fallback when neither subscription nor plans table row exists.
+func FreePlanEntitlements() (string, map[string]any, error) {
+	plan, ok := GetPlan("free")
+	if !ok {
+		return "", nil, fmt.Errorf("billing: free plan not found in catalog")
+	}
+	ents := plan.EffectiveEntitlements()
+	m := map[string]any{
+		string(KeyMaxProjects):           ents.MaxProjects,
+		string(KeyMaxMembers):            ents.MaxMembers,
+		string(KeyAuditLogRetentionDays): ents.AuditLogRetentionDays,
+		string(KeyAIAssistantEnabled):    ents.AIAssistantEnabled,
+		string(KeySSOEnabled):            ents.SSOEnabled,
+		string(KeyPrioritySupport):       ents.PrioritySupport,
+	}
+	return "free", m, nil
+}
+
 // CancelBehavior returns the configured cancellation style from the catalog.
 // Returns "period_end" (default) or "immediate".
 func CancelBehavior() string {

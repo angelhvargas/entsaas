@@ -8,6 +8,7 @@ import {
   CreditCard, AlertTriangle, CheckCircle, XCircle, ArrowUpCircle, Zap, Building2,
 } from 'lucide-vue-next'
 import { usagePercent, formatUsage, usageStatusLabel } from '@/lib/usage'
+import { TIER_ORDER, getPlanName } from '@/lib/plan-catalog'
 import client from '@/api/client'
 import { useRouter } from 'vue-router'
 import { ref } from 'vue'
@@ -23,13 +24,32 @@ const planVariant = computed(() => {
 })
 
 const canUpgrade = computed(() => {
-  return billing.planSlug === 'free' || billing.planSlug === 'pro'
+  // Can upgrade if current plan is not the highest tier.
+  const currentTier = TIER_ORDER[billing.planSlug] ?? 0
+  const maxTier = Math.max(...Object.values(TIER_ORDER))
+  return currentTier < maxTier
 })
 
 const nextPlanSlug = computed(() => {
-  const next = { free: 'pro', pro: 'enterprise' }
-  return next[billing.planSlug] ?? null
+  const currentTier = TIER_ORDER[billing.planSlug] ?? 0
+  const entries = Object.entries(TIER_ORDER)
+    .sort(([, a], [, b]) => a - b)
+  const next = entries.find(([, tier]) => tier > currentTier)
+  return next ? next[0] : null
 })
+
+/** True if targetId is a higher self-serve tier than the current plan. */
+function isHigherTier(targetId) {
+  if (!billing.planSlug) return false
+  return (TIER_ORDER[targetId] ?? 0) > (TIER_ORDER[billing.planSlug] ?? 0) && targetId !== 'enterprise'
+}
+
+/** True if targetId is a lower paid tier (not free — free is cancel path). */
+function isLowerTier(targetId) {
+  if (!billing.planSlug) return false
+  const targetTier = TIER_ORDER[targetId] ?? 0
+  return targetTier > 0 && targetTier < (TIER_ORDER[billing.planSlug] ?? 0)
+}
 
 // Feature entitlements derived from the billing store
 const featureEntitlements = computed(() => {
@@ -80,8 +100,8 @@ function barClass(pct) {
   return 'fill--ok'
 }
 
-async function handleUpgrade() {
-  const target = nextPlanSlug.value
+async function handleUpgrade(targetSlug) {
+  const target = targetSlug || nextPlanSlug.value
   if (!target) return
   if (target === 'enterprise') {
     router.push('/settings')
@@ -184,8 +204,8 @@ onMounted(() => billing.fetchPlan())
         </div>
 
         <template #footer v-if="canUpgrade">
-          <UiButton variant="primary" size="sm" :loading="checkoutLoading" @click="handleUpgrade">
-            <Zap :size="14" /> Upgrade to {{ nextPlanSlug === 'pro' ? 'Pro' : 'Enterprise' }}
+          <UiButton variant="primary" size="sm" :loading="checkoutLoading" @click="handleUpgrade()">
+            <Zap :size="14" /> Upgrade to {{ getPlanName(nextPlanSlug) }}
           </UiButton>
           <span class="upgrade-hint">Self-serve upgrade via secure checkout</span>
         </template>
@@ -217,7 +237,7 @@ onMounted(() => billing.fetchPlan())
       </UiCard>
 
       <!-- Plan comparison -->
-      <UiCard padding="md" style="margin-bottom:1.5rem">
+      <UiCard id="plan-comparison" padding="md" style="margin-bottom:1.5rem">
         <template #header>
           <div class="card-header-row">
             <ArrowUpCircle :size="16" style="color:var(--color-primary)" />
@@ -253,15 +273,26 @@ onMounted(() => billing.fetchPlan())
             </ul>
             <div class="plan-col-action">
               <span v-if="billing.planSlug === col.id" class="plan-current-label">Your plan</span>
+              <!-- Upgrade button: any higher self-serve tier -->
               <UiButton
-                v-else-if="col.selfServe && canUpgrade && nextPlanSlug === col.id"
+                v-else-if="col.selfServe && isHigherTier(col.id)"
                 variant="primary"
                 :full="true"
                 size="sm"
                 :loading="checkoutLoading"
-                @click="handleUpgrade"
+                @click="handleUpgrade(col.id)"
               >
                 Upgrade to {{ col.name }}
+              </UiButton>
+              <!-- Downgrade button: any lower self-serve tier (not free — that's cancel) -->
+              <UiButton
+                v-else-if="col.selfServe && isLowerTier(col.id)"
+                variant="secondary"
+                :full="true"
+                size="sm"
+                @click="handleUpgrade(col.id)"
+              >
+                Switch to {{ col.name }}
               </UiButton>
               <UiButton
                 v-else-if="col.id === 'enterprise'"

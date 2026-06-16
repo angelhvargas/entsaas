@@ -12,11 +12,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// FreePlanFallbackFn resolves free-plan entitlements from an in-memory catalog
+// when the plans table has no 'free' row. Returns (slug, entitlements, error).
+// Injected by the application layer to avoid circular billing↔store imports.
+type FreePlanFallbackFn func() (string, map[string]any, error)
+
 // PostgresStore implements the AppStore interface using pgx connection pool.
 type PostgresStore struct {
-	pool      *pgxpool.Pool
-	masterKey []byte
-	keyVer    int
+	pool              *pgxpool.Pool
+	masterKey         []byte
+	keyVer            int
+	freePlanFallback  FreePlanFallbackFn
 }
 
 // NewPostgresStore connects to Postgres and returns a new store.
@@ -47,6 +53,12 @@ func NewPostgresStore(dsn string, masterKey []byte, keyVersion int, maxConns, mi
 
 	log.Info().Str("host", cfg.ConnConfig.Host).Int32("max_conns", cfg.MaxConns).Msg("Postgres connected")
 	return &PostgresStore{pool: pool, masterKey: masterKey, keyVer: keyVersion}, nil
+}
+
+// SetFreePlanFallback injects an in-memory free-plan resolver used when the
+// plans table has no 'free' row (e.g., fresh deployment before seeding).
+func (s *PostgresStore) SetFreePlanFallback(fn FreePlanFallbackFn) {
+	s.freePlanFallback = fn
 }
 
 // Pool returns the underlying pgxpool for direct access when needed.
@@ -754,7 +766,7 @@ func (s *PostgresStore) GetEffectiveEntitlements(ctx context.Context, orgID stri
 	err := s.pool.QueryRow(ctx, query, orgID).Scan(&slug, &entitlementsBytes)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			// 2. Fallback to free plan entitlements
+			// 2. Fallback to free plan entitlements from DB.
 			fallbackQuery := `
 				SELECT p.slug, pv.entitlements
 				FROM plans p
@@ -766,6 +778,13 @@ func (s *PostgresStore) GetEffectiveEntitlements(ctx context.Context, orgID stri
 			err = s.pool.QueryRow(ctx, fallbackQuery).Scan(&slug, &entitlementsBytes)
 			if err != nil {
 				if err == pgx.ErrNoRows {
+					// 3. In-memory fallback: use billing catalog if DB has no free plan.
+					// This prevents enforcement from failing or treating unsubscribed
+					// orgs as unlimited on fresh deployments before seeding.
+					if s.freePlanFallback != nil {
+						log.Debug().Str("org_id", orgID).Msg("store: free-plan fallback used (no subscription, no DB plan row)")
+						return s.freePlanFallback()
+					}
 					return "", nil, ErrNotFound
 				}
 				return "", nil, err
